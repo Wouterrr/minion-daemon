@@ -36,7 +36,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 * @var int How many iterations before we run the cleanup method?
 	 * @access protected
 	 */
-	protected $_cleanup_iterations = 100;
+	protected $_cleanup_iterations = 1000;
 
 	/**
 	 * @var boolean PHP >5.3 garbage collection enabled?
@@ -48,9 +48,11 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 * @var array CLI arguments
 	 * @access protected
 	 */
-	protected $_daemon_config = array(
-		"fork",
-		"pid",
+	protected $_daemon_options = array(
+		"fork" => TRUE,
+		"pid" => "/tmp/minion-daemon-{worker}.pid",
+		"exit" => TRUE,
+        "worker" => 1
 	);
 
 	/**
@@ -65,12 +67,6 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 */
 	protected $_logger = NULL;
 
-	/**
-	 * @array log writer references
-	 * @access protected
-	 */
-	protected $_log_writers = array();
-
 
 	/**
 	 * Sets up the daemon task
@@ -83,18 +79,13 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 		// No time limit on minion daemon tasks
 		set_time_limit(0);
 
-		// Attach logger.  By default, this is the Minion logger.
-		$this->_logger = (class_exists("Minion_Log")) ? Minion_Log::instance() : Kohana::$log;
-
-		// Attach the standard Kohana log file as an output.
-		$log_path = Kohana::$config->load('minion-daemon')->logpath;
-		$this->_logger->attach($this->_log_writers['file'] = new Log_File($log_path));
-
-		// Attach stdout log as an output.  Write to it on add
-		$this->_logger->attach($this->_log_writers['stdout'] = new Log_StdOut, array(), 0, TRUE);
-
 		// Merge configs
-		$this->_config = Arr::merge($this->_daemon_config, $this->_config);
+		$this->_options = Arr::merge($this->_daemon_options, $this->_options);
+
+        // Check PID
+        $this->_setup_pid($this->_options);
+
+		parent::__construct();
 
 		if ( ! function_exists('pcntl_signal_dispatch'))
 		{
@@ -108,11 +99,11 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 		{
 			$message = 'PHP does not appear to be compiled with the PCNTL extension.  This is neccesary for daemonization';
 
-			$this->_log(Log::ERROR,$message);
+			Kohana::$log->add(Log::ERROR,$message);
 			throw new Kohana_Exception($message);
 		}
-		
-		pcntl_signal(SIGTERM, array($this, 'handle_signals'));
+
+        pcntl_signal(SIGTERM, array($this, 'handle_signals'));
 		pcntl_signal(SIGINT, array($this, 'handle_signals'));
 		pcntl_signal(SIGQUIT, array($this, 'handle_signals'));
 
@@ -121,6 +112,12 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 		{
 			gc_enable();
 			$this->_gc_enabled = gc_enabled();
+		}
+
+		while (ob_get_level())
+		{
+			// Flush all output buffers (so echo statements work)
+			ob_end_flush();
 		}
 	}
 
@@ -133,10 +130,6 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 */
 	public function handle_signals($signal)
 	{
-		$this->_log(Log::INFO,"Received signal ':signal'", array(
-			':signal' => $signal,
-		));
-
 		// We don't want to exit the script prematurely
 		switch ($signal)
 		{
@@ -146,7 +139,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 				$this->_terminate = TRUE;
 				break;
 			default:
-				$this->_log(Log::ERROR, 'signal :signal is unhandled. Terminating', array(
+				Kohana::$log->add(Log::ERROR, 'signal :signal is unhandled. Terminating', array(
 					':signal' => $signal,
 				));
 				$this->_terminate = TRUE;
@@ -162,55 +155,27 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 */
 	protected function _setup_pid(array $config)
 	{
-		if (array_key_exists('pid', $config) AND $config['pid'] !== NULL)
+        if ( ARR::get($config, 'pid'))
 		{
-			$this->_pid = $config['pid'];
-			
-			if (preg_match('@[^\w/\.]@u', $this->_pid))
-			{
-				$message = 'Invalid pidfile name';
-				$this->_log(Log::ERROR,$message);
-				throw new Kohana_Exception($message);
-			}
+			// add worker ID to pid file
+            $this->_pid = strtr($config['pid'], array(
+                '{worker}' => ARR::get($config, 'worker', 1)
+            ));
 
-			$dir = preg_replace('@^(.*/)?[\w\.]+$@u', '$1', $this->_pid);
-			
-			if ($dir AND ! file_exists($dir))
-			{
-				mkdir($dir, 02777, TRUE);
-				
-				// Fix umask issues
-				chmod($dir, 02777);
-			}
-			
-			if ( ! file_exists($this->_pid))
-			{
-				file_put_contents($this->_pid, getmypid());
-				
-				chmod($this->_pid, 0666);
-			}
-			else
+            if ( file_exists($this->_pid))
 			{
 				$pid = file_get_contents($this->_pid);
-				
-				$message = "Daemon already running with a PID of $pid";
-				
-				$this->_log(Log::ERROR,$message);
-				throw new Kohana_Exception($message);
+				echo "Daemon already running with a PID of $pid";
+				exit(0);
 			}
 		}
 	}
 	
 	/**
 	 * Execute minion task.
-	 * This should NOT be extended unless absolutely neccesary
-	 *
-	 * @access public
-	 * @param array $config
-	 * @param boolean $exit Exit() on completion?
 	 * @return void
 	 */
-	public function execute(array $config, $exit = TRUE)
+	protected function _execute(array $config)
 	{
 		// Should we fork this daemon?
 		if (array_key_exists('fork', $config) AND $config['fork'] == TRUE)
@@ -222,9 +187,11 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 			}
 		}
 		
-		// Set the pid if it is present
-		$this->_setup_pid($config);
-		
+        if ( $this->_pid) {
+            // Set the pid if required
+            file_put_contents( $this->_pid, getmypid());
+        }
+
 		// Setup loop
 		$this->before($config);
 
@@ -286,15 +253,21 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 
 		// Cleanup
 		$this->after($config);
-		
+
 		// Remove PID file
 		if ($this->_pid)
 		{
 			unlink($this->_pid);
 		}
-		
+
+        // Write log
+        Kohana::$log->add(Log::NOTICE, 'Task worker :id exiting', array(
+            ':id' => $this->_options['worker']
+        ));
+        Kohana::$log->write();
+
 		// If possible, exit rather than return to keep a clean output
-		if ($exit)
+		if ( ARR::get($config, 'exit') === TRUE)
 		{
 			exit(0);
 		}
@@ -366,7 +339,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 */
 	protected function _handle_exception(Exception $e)
 	{
-		$this->_log(Log::ERROR,Kohana_Exception::text($e));
+		Kohana::$log->add(Log::ERROR,Kohana_Exception::text($e));
 	}
 
 	/**
@@ -385,23 +358,20 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 		{
 			$message = "Failed to fork process.  Exiting.";
 
-			$this->_log(Log::ERROR,$message);
+			Kohana::$log->add(Log::ERROR,$message);
 			throw new Kohana_Exception($message);
 		}
 		elseif ($pid)
 		{
 			// This is the parent process.
-			$this->_log(Log::NOTICE,"Process forked with a PID of $pid");
+			Kohana::$log->add(Log::NOTICE,"Worker :id forked with a PID of $pid", array(
+                ':id' => $this->_options['worker']
+            ));
+			echo "Process forked with a PID of $pid\n";
 
 			return Minion_Daemon::PARENT_PROC;
 		}
 
-		// This is the child process.  Don't write output to the screen
-		if (array_key_exists('stdout',$this->_log_writers))
-		{
-			$this->_logger->detach($this->_log_writers['stdout']);
-		}
-		
 		return Minion_Daemon::CHILD_PROC;
 	}
 
@@ -419,7 +389,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 		clearstatcache();
 
 		// Force Kohana to write logs.  Otherwise, memory will continue to grow
-		$this->_logger->write();
+		Kohana::$log->write();
 
 		// Garbage collection
 		if ($this->_gc_enabled)
@@ -428,25 +398,6 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 		}
 
 		// Log memory usage for monitoring purposes
-		$this->_log(Log::INFO,"Running _cleanup().  Current memory usage: :memory bytes.",array(":memory" => memory_get_usage()));
+		Kohana::$log->add(Log::INFO,"Running _cleanup().  Current memory usage: :memory bytes.",array(":memory" => memory_get_usage()));
 	}
-
-	/**
-	 * Write to $this->_logger.  Prepends the task name
-	 *
-	 * @access protected
-	 * @param mixed $level
-	 * @param mixed $message
-	 * @param array $values (default: NULL)
-	 * @return void
-	 */
-	protected function _log($level, $message, array $values = NULL)
-	{
-		$task = $this->__toString();
-
-		$this->_logger->add($level,"daemon ".$task.": ".$message,$values);
-
-		return $this;
-	}
-
 }
