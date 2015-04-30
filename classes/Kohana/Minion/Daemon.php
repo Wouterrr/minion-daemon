@@ -155,11 +155,11 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 */
 	protected function _setup_pid(array $config)
 	{
-        if ( ARR::get($config, 'pid'))
+        if ( Arr::get($config, 'pid'))
 		{
 			// add worker ID to pid file
             $this->_pid = strtr($config['pid'], array(
-                '{worker}' => ARR::get($config, 'worker', 1)
+                '{worker}' => Arr::get($config, 'worker', 1)
             ));
 
             if ( file_exists($this->_pid))
@@ -267,7 +267,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
         Kohana::$log->write();
 
 		// If possible, exit rather than return to keep a clean output
-		if ( ARR::get($config, 'exit') === TRUE)
+		if ( Arr::get($config, 'exit') === TRUE)
 		{
 			exit(0);
 		}
