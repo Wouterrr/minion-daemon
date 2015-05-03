@@ -1,0 +1,23 @@
+{
+  "name": "wouterrr/minion-daemon",
+  "type": "kohana-module",
+  "description": "A daemon for Minion Tasks for Kohana",
+  "keywords": ["kohana", "minion", "daemon"],
+  "homepage": "https://github.com/Wouterrr/minion-daemon",
+  "license": "Kohana License",
+  "authors": [
+    {
+      "name": "Wouter Wiegmans"
+    }
+  ],
+  "support": {
+    "issues":   "https://github.com/Wouterrr/minion-daemon/issues",
+    "source":   "https://github.com/Wouterrr/minion-daemon"
+  },
+  "require": {
+    "composer/installers": "~1.0",
+    "kohana/core": ">=3.3",
+    "kohana/minion": "3.3.3.1",
+    "php": ">=5.3.0"
+  }
+}
