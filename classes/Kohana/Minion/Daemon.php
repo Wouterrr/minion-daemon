@@ -42,7 +42,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	 * @var boolean PHP >5.3 garbage collection enabled?
 	 * @access protected
 	 */
-	protected $_gc_enabled = FALSE;
+	protected $_gc_enabled = TRUE;
 
 	/**
 	 * @var array CLI arguments
