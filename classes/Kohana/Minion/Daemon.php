@@ -340,6 +340,7 @@ abstract class Kohana_Minion_Daemon extends Minion_Task {
 	protected function _handle_exception(Exception $e)
 	{
 		Kohana::$log->add(Log::ERROR,Kohana_Exception::text($e));
+        Kohana::$log->add(Log::DEBUG,$e->getTraceAsString());
 	}
 
 	/**
